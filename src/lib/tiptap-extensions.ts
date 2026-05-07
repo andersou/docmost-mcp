@@ -13,7 +13,7 @@ export const tiptapExtensions = [
     heading: {},
   }),
   Image.configure({
-    inline: true,
+    inline: false,
   }),
   Link.configure({
     openOnClick: false,

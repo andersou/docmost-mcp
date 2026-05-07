@@ -28,10 +28,18 @@ const VERSION = packageJson.version;
 const API_URL = process.env.DOCMOST_API_URL;
 const EMAIL = process.env.DOCMOST_EMAIL;
 const PASSWORD = process.env.DOCMOST_PASSWORD;
+const UPDATE_TYPE = (process.env.DOCMOST_UPDATE_TYPE || "WS") as "WS" | "REST";
 
 if (!API_URL || !EMAIL || !PASSWORD) {
   console.error(
     "Error: DOCMOST_API_URL, DOCMOST_EMAIL, and DOCMOST_PASSWORD environment variables are required.",
+  );
+  process.exit(1);
+}
+
+if (!["WS", "REST"].includes(UPDATE_TYPE)) {
+  console.error(
+    "Error: DOCMOST_UPDATE_TYPE must be either 'WS' or 'REST'. Default is 'WS'.",
   );
   process.exit(1);
 }
@@ -239,11 +247,43 @@ class DocmostClient {
 
   /**
    * Update a page's content and optionally its title.
-   * Leverages WebSocket collaboration to update content without changing Page ID.
+   *
+   * Supports two update modes:
+   * - 'WS' (default): WebSocket real-time collaboration. Preserves Page ID and history.
+   *   Note: Docmost has a ~10s debounce before content is persisted. History versions
+   *   appear after a 1-5 minute delay (Docmost queues history snapshot jobs).
+   * - 'REST': REST API for instant persistence. History is generated immediately.
+   *   Docmost handles Markdown-to-ProseMirror conversion server-side.
    */
-  async updatePage(pageId: string, content: string, title?: string) {
+  async updatePage(
+    pageId: string,
+    content: string,
+    title?: string,
+  ) {
     await this.ensureAuthenticated();
 
+    if (UPDATE_TYPE === "REST") {
+      // REST API update - instant persistence, immediate history
+      if (title) {
+        await this.client.post("/pages/update", { pageId, title });
+      }
+
+      await this.client.post("/pages/update", {
+        pageId,
+        content,
+        operation: "replace",
+        format: "markdown",
+      });
+
+      return {
+        success: true,
+        modified: true,
+        message: "Page updated successfully via REST API.",
+        pageId: pageId,
+      };
+    }
+
+    // WebSocket update - real-time collaboration
     // 1. Update Title via REST API if provided
     if (title) {
       await this.client.post("/pages/update", { pageId, title });
@@ -268,10 +308,16 @@ class DocmostClient {
       );
     }
 
+    // // 3. Wait for Docmost Hocuspocus persistence (10s debounce + buffer)
+    // // The MCP process must stay alive long enough for onStoreDocument to fire.
+    // console.error("Waiting 35s for Docmost persistence...");
+    // await new Promise((resolve) => setTimeout(resolve, 35000));
+    // console.error("Wait complete. Returning to client.");
+
     return {
       success: true,
       modified: true,
-      message: "Page updated successfully.",
+      message: "Page updated successfully via WebSocket.",
       pageId: pageId,
     };
   }
@@ -437,12 +483,12 @@ server.registerTool(
   },
 );
 
-// Tool: update_page (Safe)
+// Tool: update_page
 server.registerTool(
   "update_page",
   {
     description:
-      "Update a page's content and/or title via realtime collaboration (preserves Page ID and history).",
+      "Update a page's content and/or title. The update mode (WebSocket or REST) is configured via the DOCMOST_UPDATE_TYPE environment variable (default: WS).",
     inputSchema: {
       pageId: z.string().describe("ID of the page to update"),
       content: z.string().describe("New Markdown content"),

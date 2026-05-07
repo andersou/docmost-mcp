@@ -63,10 +63,44 @@ Add the following to your MCP configuration (e.g. `claude_desktop_config.json`):
 }
 ```
 
+To run the MCP server directly from TypeScript source during development, use
+`tsx` without watch mode:
+
+```json
+{
+  "mcpServers": {
+    "docmost-local": {
+      "command": "npm",
+      "args": [
+        "--silent",
+        "--prefix",
+        "/Users/andersou/git/docmost-mcp",
+        "run",
+        "dev:src"
+      ],
+      "env": {
+        "DOCMOST_API_URL": "http://localhost:3000/api",
+        "DOCMOST_EMAIL": "test@docmost.com",
+        "DOCMOST_PASSWORD": "test"
+      }
+    }
+  }
+}
+```
+
+Watch mode is useful in a terminal, but MCP clients expect a stable stdio
+process. Restart or reconnect the MCP server after source changes.
+
 ## Development
 
 ```bash
-# Watch mode
+# Run from source
+npm run dev:src
+
+# Run from source and restart when src changes
+npm run dev:watch
+
+# TypeScript watch mode only
 npm run watch
 
 # Build

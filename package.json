@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "tsc",
+    "dev:src": "tsx src/index.ts",
+    "dev:watch": "tsx watch --clear-screen=false src/index.ts",
     "start": "node build/index.js",
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector --config mcp_config.json"
@@ -44,6 +46,7 @@
   "devDependencies": {
     "@types/form-data": "^2.5.0",
     "@types/node": "^20.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.0.0"
   }
 }
