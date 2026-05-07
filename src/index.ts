@@ -16,6 +16,11 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { updatePageContentRealtime } from "./lib/collaboration.js";
 import { getCollabToken, performLogin } from "./lib/auth-utils.js";
+import {
+  extractAndReplaceWithPlaceholders,
+  replacePlaceholdersWithUrls,
+  uploadAttachments,
+} from "./lib/attachments.js";
 
 // Read version from package.json
 const __filename = fileURLToPath(import.meta.url);
@@ -204,6 +209,7 @@ class DocmostClient {
     content: string,
     spaceId: string,
     parentPageId?: string,
+    imageRelativeBasePath?: string,
   ) {
     await this.ensureAuthenticated();
 
@@ -215,11 +221,20 @@ class DocmostClient {
       }
     }
 
+    // Extract local file paths and replace with placeholders (/to-substitute/{index})
+    const { processedMarkdown: markdownWithPlaceholders, files } = extractAndReplaceWithPlaceholders(
+      content,
+      imageRelativeBasePath,
+    );
+
+    console.error(`[CreatePage] Found ${files.length} local attachments`);
+    files.forEach((f) => console.error(`[CreatePage]  - ${f.originalPath} -> /to-substitute/${f.index}`));
+
     // 1. Create content via Import (using multipart/form-data)
     const form = new FormData();
     form.append("spaceId", spaceId);
 
-    const fileContent = Buffer.from(content, "utf-8");
+    const fileContent = Buffer.from(markdownWithPlaceholders, "utf-8");
     form.append("file", fileContent, {
       filename: `${title || "import"}.md`,
       contentType: "text/markdown",
@@ -241,8 +256,45 @@ class DocmostClient {
       await this.movePage(newPageId, parentPageId);
     }
 
-    // Return the final page object
-    return this.getPage(newPageId);
+    // 3. Upload attachments if any
+    let attachmentUploads: any[] = [];
+    if (files.length > 0) {
+      attachmentUploads = await uploadAttachments(
+        newPageId,
+        files,
+        this.token!,
+        API_URL!,
+      );
+
+      // 4. Replace placeholders with real URLs and update page
+      const successfulUploads = attachmentUploads.filter((u) => u.success);
+      if (successfulUploads.length > 0) {
+        const finalMarkdown = replacePlaceholdersWithUrls(
+          markdownWithPlaceholders,
+          successfulUploads,
+        );
+
+        console.error(`[CreatePage] Updating page with real attachment URLs`);
+
+        try {
+          await this.client.post("/pages/update", {
+            pageId: newPageId,
+            content: finalMarkdown,
+            operation: "replace",
+            format: "markdown",
+          });
+        } catch (e: any) {
+          console.error(`[CreatePage] Failed to update page with URLs:`, e.message);
+        }
+      }
+    }
+
+    // Return the final page object with attachment uploads info
+    const page = await this.getPage(newPageId);
+    return {
+      ...page,
+      attachmentUploads,
+    };
   }
 
   /**
@@ -259,8 +311,40 @@ class DocmostClient {
     pageId: string,
     content: string,
     title?: string,
+    imageRelativeBasePath?: string,
   ) {
     await this.ensureAuthenticated();
+
+    // Extract local file paths and replace with placeholders (/to-substitute/{index})
+    const { processedMarkdown: markdownWithPlaceholders, files } = extractAndReplaceWithPlaceholders(
+      content,
+      imageRelativeBasePath,
+    );
+
+    console.error(`[UpdatePage] Found ${files.length} local attachments`);
+    files.forEach((f) => console.error(`[UpdatePage]  - ${f.originalPath} -> /to-substitute/${f.index}`));
+
+    // Upload attachments FIRST (page already exists, so we can upload before updating)
+    let attachmentUploads: any[] = [];
+    if (files.length > 0) {
+      attachmentUploads = await uploadAttachments(
+        pageId,
+        files,
+        this.token!,
+        API_URL!,
+      );
+    }
+
+    // Replace placeholders with real URLs
+    const successfulUploads = attachmentUploads.filter((u) => u.success);
+    let finalMarkdown = markdownWithPlaceholders;
+    if (successfulUploads.length > 0) {
+      finalMarkdown = replacePlaceholdersWithUrls(
+        markdownWithPlaceholders,
+        successfulUploads,
+      );
+      console.error(`[UpdatePage] Replaced ${successfulUploads.length} placeholders with real URLs`);
+    }
 
     if (UPDATE_TYPE === "REST") {
       // REST API update - instant persistence, immediate history
@@ -270,7 +354,7 @@ class DocmostClient {
 
       await this.client.post("/pages/update", {
         pageId,
-        content,
+        content: finalMarkdown,
         operation: "replace",
         format: "markdown",
       });
@@ -280,6 +364,7 @@ class DocmostClient {
         modified: true,
         message: "Page updated successfully via REST API.",
         pageId: pageId,
+        attachmentUploads,
       };
     }
 
@@ -291,10 +376,10 @@ class DocmostClient {
 
     // 2. Update Content via WebSocket
     let collabToken = "";
+    const baseURL = this.client.defaults.baseURL || "";
     try {
-      const baseURL = this.client.defaults.baseURL || "";
       collabToken = await getCollabToken(baseURL, this.token!);
-      await updatePageContentRealtime(pageId, content, collabToken, baseURL);
+      await updatePageContentRealtime(pageId, finalMarkdown, collabToken, baseURL);
     } catch (error: any) {
       console.error(
         "Failed to update page content via realtime collaboration:",
@@ -308,17 +393,12 @@ class DocmostClient {
       );
     }
 
-    // // 3. Wait for Docmost Hocuspocus persistence (10s debounce + buffer)
-    // // The MCP process must stay alive long enough for onStoreDocument to fire.
-    // console.error("Waiting 35s for Docmost persistence...");
-    // await new Promise((resolve) => setTimeout(resolve, 35000));
-    // console.error("Wait complete. Returning to client.");
-
     return {
       success: true,
       modified: true,
       message: "Page updated successfully via WebSocket.",
       pageId: pageId,
+      attachmentUploads,
     };
   }
 
@@ -461,23 +541,28 @@ server.registerTool(
   "create_page",
   {
     description:
-      "Create a new page with content (automatically moves it to the correct hierarchy).",
+      "Create a new page with content (automatically moves it to the correct hierarchy). Local file paths in markdown images/links (e.g., ![alt](./image.png) or [doc](/path/to/file.pdf)) are automatically detected, converted to /api/files/{uuid}/{filename} URLs, and uploaded as attachments to the page. Pass imageRelativeBasePath when using relative paths.",
     inputSchema: {
       title: z.string().describe("Title of the page"),
-      content: z.string().describe("Markdown content"),
+      content: z.string().describe("Markdown content. Local file paths in images/links will be automatically uploaded as attachments."),
       spaceId: z.string(),
       parentPageId: z
         .string()
         .optional()
         .describe("Optional parent page ID to nest under"),
+      imageRelativeBasePath: z
+        .string()
+        .optional()
+        .describe("Optional base directory for resolving relative file paths in markdown (e.g., '/path/to/project'). If not provided, relative paths are resolved from the current working directory."),
     },
   },
-  async ({ title, content, spaceId, parentPageId }) => {
+  async ({ title, content, spaceId, parentPageId, imageRelativeBasePath }) => {
     const result = await docmostClient.createPage(
       title,
       content,
       spaceId,
       parentPageId,
+      imageRelativeBasePath,
     );
     return jsonContent(result);
   },
@@ -488,15 +573,19 @@ server.registerTool(
   "update_page",
   {
     description:
-      "Update a page's content and/or title. The update mode (WebSocket or REST) is configured via the DOCMOST_UPDATE_TYPE environment variable (default: WS).",
+      "Update a page's content and/or title. The update mode (WebSocket or REST) is configured via the DOCMOST_UPDATE_TYPE environment variable (default: WS). Local file paths in markdown images/links are automatically detected, converted to /api/files/{uuid}/{filename} URLs, and uploaded as attachments to the page. Pass imageRelativeBasePath when using relative paths.",
     inputSchema: {
       pageId: z.string().describe("ID of the page to update"),
-      content: z.string().describe("New Markdown content"),
+      content: z.string().describe("New Markdown content. Local file paths in images/links will be automatically uploaded as attachments."),
       title: z.string().optional().describe("Optional new title"),
+      imageRelativeBasePath: z
+        .string()
+        .optional()
+        .describe("Optional base directory for resolving relative file paths in markdown (e.g., '/path/to/project'). If not provided, relative paths are resolved from the current working directory."),
     },
   },
-  async ({ pageId, content, title }) => {
-    const result = await docmostClient.updatePage(pageId, content, title);
+  async ({ pageId, content, title, imageRelativeBasePath }) => {
+    const result = await docmostClient.updatePage(pageId, content, title, imageRelativeBasePath);
     return jsonContent(result);
   },
 );
