@@ -679,6 +679,38 @@ server.registerTool(
   },
 );
 
+// Prompt: docmost_markdown_reference
+// Reads from an external markdown file for easy maintenance
+const promptFilePath = join(__dirname, "prompts", "docmost_markdown_reference.md");
+let markdownReferencePrompt: string;
+try {
+  markdownReferencePrompt = readFileSync(promptFilePath, "utf-8");
+} catch (err) {
+  console.error(`Failed to read prompt file at ${promptFilePath}:`, err);
+  markdownReferencePrompt = "# Docmost Markdown Formatting Reference\n\n(Prompt file not found)";
+}
+
+server.registerPrompt(
+  "docmost_markdown_reference",
+  {
+    description:
+      "Reference guide for Markdown formatting supported by Docmost. Use this to ensure content renders correctly when creating or updating pages.",
+  },
+  async () => {
+    return {
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: markdownReferencePrompt,
+          },
+        },
+      ],
+    };
+  },
+);
+
 async function run() {
   const transport = new StdioServerTransport();
   await server.connect(transport);

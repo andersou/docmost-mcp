@@ -7,7 +7,7 @@
     "docmost-mcp": "build/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/prompts build/prompts",
     "dev:src": "tsx src/index.ts",
     "dev:watch": "tsx watch --clear-screen=false src/index.ts",
     "start": "node build/index.js",

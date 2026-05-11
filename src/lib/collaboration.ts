@@ -6,6 +6,7 @@ import { marked } from "marked";
 import { generateJSON } from "@tiptap/html";
 import { JSDOM } from "jsdom";
 import { tiptapExtensions } from "./tiptap-extensions.js";
+import { preprocessCallouts } from "./markdown-preprocessor.js";
 
 // Setup DOM environment for Tiptap HTML parsing in Node.js
 const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>");
@@ -29,8 +30,9 @@ export async function updatePageContentRealtime(
     `Token prefix: ${collabToken ? collabToken.substring(0, 5) : "NONE"}...`,
   );
 
-  // 1. Convert Markdown to HTML
-  const html = await marked.parse(markdownContent);
+  // 1. Preprocess callouts and convert Markdown to HTML
+  const preprocessedMarkdown = preprocessCallouts(markdownContent);
+  const html = await marked.parse(preprocessedMarkdown);
 
   // 2. Convert HTML to ProseMirror JSON
   const tiptapJson = generateJSON(html, tiptapExtensions);

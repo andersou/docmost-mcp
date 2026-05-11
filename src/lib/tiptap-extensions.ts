@@ -2,6 +2,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import Link from "@tiptap/extension-link";
 import { TableKit } from "@tiptap/extension-table";
+import { Callout } from "./extensions/callout.js";
 
 // Define extensions compatible with standard Markdown features
 // We use the default Tiptap extensions to handle basic content
@@ -19,4 +20,5 @@ export const tiptapExtensions = [
     openOnClick: false,
   }),
   TableKit,
+  Callout,
 ];
