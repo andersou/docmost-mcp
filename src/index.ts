@@ -315,49 +315,63 @@ class DocmostClient {
   ) {
     await this.ensureAuthenticated();
 
-    // Extract local file paths and replace with placeholders (/to-substitute/{index})
-    const { processedMarkdown: markdownWithPlaceholders, files } = extractAndReplaceWithPlaceholders(
-      content,
-      imageRelativeBasePath,
-    );
+    const t0 = Date.now();
 
-    console.error(`[UpdatePage] Found ${files.length} local attachments`);
-    files.forEach((f) => console.error(`[UpdatePage]  - ${f.originalPath} -> /to-substitute/${f.index}`));
-
-    // Upload attachments FIRST (page already exists, so we can upload before updating)
+    // Skip attachment extraction when no base path — avoids scanning entire
+    // markdown for local files that would be resolved from process.cwd()
+    let finalMarkdown = content;
     let attachmentUploads: any[] = [];
-    if (files.length > 0) {
-      attachmentUploads = await uploadAttachments(
-        pageId,
-        files,
-        this.token!,
-        API_URL!,
+
+    if (imageRelativeBasePath) {
+      const { processedMarkdown: markdownWithPlaceholders, files } = extractAndReplaceWithPlaceholders(
+        content,
+        imageRelativeBasePath,
       );
+
+      console.error(`[UpdatePage] Found ${files.length} local attachments`);
+      files.forEach((f) => console.error(`[UpdatePage]  - ${f.originalPath} -> /to-substitute/${f.index}`));
+
+      // Upload attachments FIRST (page already exists, so we can upload before updating)
+      if (files.length > 0) {
+        attachmentUploads = await uploadAttachments(
+          pageId,
+          files,
+          this.token!,
+          API_URL!,
+        );
+      }
+
+      // Replace placeholders with real URLs
+      const successfulUploads = attachmentUploads.filter((u) => u.success);
+      if (successfulUploads.length > 0) {
+        finalMarkdown = replacePlaceholdersWithUrls(
+          markdownWithPlaceholders,
+          successfulUploads,
+        );
+        console.error(`[UpdatePage] Replaced ${successfulUploads.length} placeholders with real URLs`);
+      }
     }
 
-    // Replace placeholders with real URLs
-    const successfulUploads = attachmentUploads.filter((u) => u.success);
-    let finalMarkdown = markdownWithPlaceholders;
-    if (successfulUploads.length > 0) {
-      finalMarkdown = replacePlaceholdersWithUrls(
-        markdownWithPlaceholders,
-        successfulUploads,
-      );
-      console.error(`[UpdatePage] Replaced ${successfulUploads.length} placeholders with real URLs`);
-    }
+    const tExtract = Date.now();
+    console.error(`[UpdatePage] Extraction took ${tExtract - t0}ms`);
 
     if (UPDATE_TYPE === "REST") {
       // REST API update - instant persistence, immediate history
-      if (title) {
-        await this.client.post("/pages/update", { pageId, title });
-      }
-
-      await this.client.post("/pages/update", {
+      // Combine title + content into a single request to halve round-trips
+      const updatePayload: any = {
         pageId,
         content: finalMarkdown,
         operation: "replace",
         format: "markdown",
-      });
+      };
+
+      if (title) {
+        updatePayload.title = title;
+      }
+
+      const tApiStart = Date.now();
+      await this.client.post("/pages/update", updatePayload);
+      console.error(`[UpdatePage] REST API call took ${Date.now() - tApiStart}ms`);
 
       return {
         success: true,
