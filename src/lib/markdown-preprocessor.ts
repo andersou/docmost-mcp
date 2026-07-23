@@ -35,3 +35,31 @@ export function preprocessCallouts(markdown: string): string {
     return `<div data-callout data-type="${calloutType}">\n\n${trimmedContent}\n\n</div>`;
   });
 }
+
+/**
+ * Preprocesses custom <status> tags in markdown before passing to marked.parse().
+ * 
+ * Converts:
+ *   <status color="green">STATUS: EM APROVAÇÃO</status>
+ *   <status color="blue">DATA: 2026-07-22</status>
+ *   <status>STATUS: DEFAULT</status>              (color defaults to "gray")
+ * 
+ * To:
+ *   <span data-type="status" data-color="green">STATUS: EM APROVAÇÃO</span>
+ * 
+ * This allows status nodes to be created via markdown when using the
+ * WebSocket collaboration update path (markdown → HTML → generateJSON → Yjs).
+ * 
+ * Supported colors: gray, blue, green, yellow, red, purple
+ */
+export function preprocessStatusTags(markdown: string): string {
+  // Match: <status ...>content</status>
+  // Attribute groups: capture color="..." or color='...'
+  const statusRegex = /<status(?:\s+(?:color\s*=\s*["'](\w+)["']))?\s*>([\s\S]*?)<\/status>/gi;
+
+  return markdown.replace(statusRegex, (match, color, content) => {
+    const statusColor = (color || "gray").toLowerCase().trim();
+    const trimmedContent = content.trim() || "";
+    return `<span data-type="status" data-color="${statusColor}">${trimmedContent}</span>`;
+  });
+}

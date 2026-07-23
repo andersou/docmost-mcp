@@ -31,6 +31,22 @@ Practical tips and suggestions.
 
 **Supported types:** info, warning, danger, success, tip, note, important, caution
 
+## Status Badges
+
+Use inline status badges to tag content with colored labels.
+
+**Syntax:**
+```markdown
+<status color="green">STATUS: EM APROVAÇÃO</status>
+<status color="blue">DATA: 2026-07-22</status>
+<status>STATUS PADRÃO</status>
+```
+
+**Supported colors:** gray (default), blue, green, yellow, red, purple
+
+**Supported attributes:**
+- `color` — badge color (optional, defaults to `gray`)
+
 ## Tables (GitHub Flavored Markdown)
 
 Use standard GFM tables — they are rendered correctly in Docmost.
@@ -60,8 +76,8 @@ Use standard GFM tables — they are rendered correctly in Docmost.
 
 ## What to Avoid
 
-- **Raw HTML:** May not be converted correctly
-- **Non-standard Markdown extensions:** Use only standard GFM + callout syntax
+- **Raw HTML:** May not be converted correctly (exception: `<status>` tags are preprocessed and supported)
+- **Non-standard Markdown extensions:** Use only standard GFM + callout + status syntax
 - **Nested callouts:** Not supported — keep callouts at the top level
 
 ## Quick Copy-Paste Templates

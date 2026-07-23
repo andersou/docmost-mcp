@@ -177,6 +177,10 @@ export function convertProseMirrorToMarkdown(content: any): string {
       case "subpages":
         return "{{SUBPAGES}}";
 
+      case "status":
+        const statusColor = node.attrs?.color || "gray";
+        return `<status color="${statusColor}">${node.attrs?.text || ""}</status>`;
+
       default:
         // Fallback: process children
         return nodeContent.map(processNode).join("");
