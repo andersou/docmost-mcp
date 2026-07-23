@@ -60,6 +60,31 @@ export function filterPage(page: any, content?: string, subpages?: any[]) {
   };
 }
 
+export function filterComment(comment: any) {
+  return {
+    id: comment.id,
+    pageId: comment.pageId,
+    content: comment.content,
+    selection: comment.selection,
+    type: comment.type,
+    parentCommentId: comment.parentCommentId,
+    creatorId: comment.creatorId,
+    creator: comment.creator
+      ? { id: comment.creator.id, name: comment.creator.name, avatarUrl: comment.creator.avatarUrl }
+      : undefined,
+    lastEditedById: comment.lastEditedById,
+    editedAt: comment.editedAt,
+    resolvedAt: comment.resolvedAt,
+    resolvedById: comment.resolvedById,
+    resolvedBy: comment.resolvedBy
+      ? { id: comment.resolvedBy.id, name: comment.resolvedBy.name, avatarUrl: comment.resolvedBy.avatarUrl }
+      : undefined,
+    spaceId: comment.spaceId,
+    createdAt: comment.createdAt,
+    updatedAt: comment.updatedAt,
+  };
+}
+
 export function filterSearchResult(result: any) {
   return {
     id: result.id,

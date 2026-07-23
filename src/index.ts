@@ -8,6 +8,7 @@ import {
   filterSpace,
   filterGroup,
   filterPage,
+  filterComment,
   filterSearchResult,
 } from "./lib/filters.js";
 import { convertProseMirrorToMarkdown } from "./lib/markdown-converter.js";
@@ -15,6 +16,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { updatePageContentRealtime } from "./lib/collaboration.js";
+import { applyCommentMark } from "./lib/yjs-comment.js";
 import { getCollabToken, performLogin } from "./lib/auth-utils.js";
 import {
   extractAndReplaceWithPlaceholders,
@@ -80,6 +82,14 @@ class DocmostClient {
     if (!this.token) {
       await this.login();
     }
+  }
+
+  get baseUrl(): string {
+    return this.client.defaults.baseURL || "";
+  }
+
+  get authToken(): string {
+    return this.token || "";
   }
 
   /**
@@ -468,6 +478,66 @@ class DocmostClient {
     );
     return Promise.all(promises);
   }
+
+  // ── Comments ───────────────────────────────────────────────
+
+  async createComment(pageId: string, content: string, selection?: string, parentCommentId?: string) {
+    await this.ensureAuthenticated();
+    const response = await this.client.post("/comments/create", {
+      pageId,
+      content,
+      ...(selection !== undefined && { selection, type: "inline" }),
+      ...(parentCommentId !== undefined && { parentCommentId }),
+    });
+    return {
+      data: filterComment(response.data.data),
+      success: response.data.success,
+    };
+  }
+
+  async listPageComments(pageId: string, limit: number = 20, cursor?: string) {
+    await this.ensureAuthenticated();
+    const response = await this.client.post("/comments", {
+      pageId,
+      limit,
+      ...(cursor !== undefined && { cursor }),
+    });
+    const data = response.data.data;
+    return {
+      items: (data?.items || []).map((item: any) => filterComment(item)),
+      meta: data?.meta || null,
+      success: response.data.success,
+    };
+  }
+
+  async getComment(commentId: string) {
+    await this.ensureAuthenticated();
+    const response = await this.client.post("/comments/info", { commentId });
+    return {
+      data: filterComment(response.data.data),
+      success: response.data.success,
+    };
+  }
+
+  async updateComment(commentId: string, content: string) {
+    await this.ensureAuthenticated();
+    const response = await this.client.post("/comments/update", {
+      commentId,
+      content,
+    });
+    return {
+      data: filterComment(response.data.data),
+      success: response.data.success,
+    };
+  }
+
+  async deleteComment(commentId: string) {
+    await this.ensureAuthenticated();
+    const response = await this.client.post("/comments/delete", { commentId });
+    return {
+      success: response.data.success,
+    };
+  }
 }
 
 const docmostClient = new DocmostClient(API_URL);
@@ -689,6 +759,111 @@ server.registerTool(
   },
   async ({ query, spaceId }) => {
     const result = await docmostClient.search(query, spaceId);
+    return jsonContent(result);
+  },
+);
+
+// ── Comment Tools ─────────────────────────────────────────
+
+// Tool: create_comment
+server.registerTool(
+  "create_comment",
+  {
+    description:
+      "Create a comment on a page. Can be a top-level comment or a threaded reply when parentCommentId is provided. The content is a ProseMirror document JSON string. When selection is provided, it creates an inline comment with visual highlight. IMPORTANT: selection text must match page content EXACTLY (including whitespace and punctuation). Use get_page first to retrieve the exact text.",
+    inputSchema: {
+      pageId: z.string().describe("ID of the page to comment on"),
+      content: z.string().describe("Comment body as a JSON string (ProseMirror document format)"),
+      selection: z.string().optional().describe("Highlighted text for inline comment. Must match EXACTLY the page content (whitespace, punctuation). Use get_page to get the exact text first."),
+      parentCommentId: z.string().optional().describe("ID of a parent comment to reply to. Creates a threaded reply when provided."),
+    },
+  },
+  async ({ pageId, content, selection, parentCommentId }) => {
+    const result = await docmostClient.createComment(pageId, content, selection, parentCommentId);
+
+    if (selection && result.data?.id) {
+      const baseURL = docmostClient.baseUrl;
+      getCollabToken(baseURL, docmostClient.authToken)
+        .then((collabToken) =>
+          applyCommentMark(
+            pageId,
+            selection,
+            result.data.id,
+            collabToken,
+            baseURL,
+          ),
+        )
+        .catch((err: any) =>
+          console.error(
+            `[CommentHighlight] Failed (non-critical): ${err.message}`,
+          ),
+        );
+    }
+
+    return jsonContent(result);
+  },
+);
+
+// Tool: list_page_comments
+server.registerTool(
+  "list_page_comments",
+  {
+    description:
+      "List comments for a page with cursor-based pagination. Returns comments ordered by creation date with creator user info.",
+    inputSchema: {
+      pageId: z.string().describe("ID of the page to list comments for"),
+      limit: z.number().min(1).max(100).optional().default(20).describe("Items per page (1-100, default: 20)"),
+      cursor: z.string().optional().describe("Cursor from a previous response's nextCursor for pagination"),
+    },
+  },
+  async ({ pageId, limit, cursor }) => {
+    const result = await docmostClient.listPageComments(pageId, limit, cursor);
+    return jsonContent(result);
+  },
+);
+
+// Tool: get_comment
+server.registerTool(
+  "get_comment",
+  {
+    description: "Get a single comment by ID with creator and resolvedBy user info.",
+    inputSchema: {
+      commentId: z.string().describe("ID of the comment to retrieve"),
+    },
+  },
+  async ({ commentId }) => {
+    const result = await docmostClient.getComment(commentId);
+    return jsonContent(result);
+  },
+);
+
+// Tool: update_comment
+server.registerTool(
+  "update_comment",
+  {
+    description: "Update a comment's content. Replaces the entire comment body with new ProseMirror JSON.",
+    inputSchema: {
+      commentId: z.string().describe("ID of the comment to update"),
+      content: z.string().describe("New comment body as a JSON string (ProseMirror document format). Replaces the entire comment content."),
+    },
+  },
+  async ({ commentId, content }) => {
+    const result = await docmostClient.updateComment(commentId, content);
+    return jsonContent(result);
+  },
+);
+
+// Tool: delete_comment
+server.registerTool(
+  "delete_comment",
+  {
+    description: "Delete a comment by ID.",
+    inputSchema: {
+      commentId: z.string().describe("ID of the comment to delete"),
+    },
+  },
+  async ({ commentId }) => {
+    const result = await docmostClient.deleteComment(commentId);
     return jsonContent(result);
   },
 );
